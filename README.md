@@ -37,7 +37,7 @@ efficiency in processing heterogeneous graphs.
 ## Code Structures
 #### The folder HGDM-Rec presents the code and datasets for link prediction(Recommendation), while HGDM-NC contains the code and datasets for the node classification task.
     .
-    ├──HGDM-Rec
+    ├──DiffGraph-Rec
      ├── DataHandler.py
      ├── main.py
      ├── param.py
@@ -45,7 +45,7 @@ efficiency in processing heterogeneous graphs.
      │   ├── TimeLogger.py            
      │   ├── Utils.py                             
      ├── Model.py
-    ├──HGDM_NC
+    ├──DiffGraph_NC
      ├──DataHandler.py
      ├── main.py
      ├── param.py
