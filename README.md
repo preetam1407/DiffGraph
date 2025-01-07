@@ -35,7 +35,7 @@ efficiency in processing heterogeneous graphs.
 - scipy=1.9.1
 - dgl=1.0.2+cu113
 ## Code Structures
-#### The folder HGDM-Rec presents the code and datasets for link prediction(Recommendation), while HGDM-NC contains the code and datasets for the node classification task.
+#### The folder DiffGraph-Rec presents the code and datasets for link prediction(Recommendation), while DiffGraph_NC contains the code and datasets for the node classification task.
     .
     ├──DiffGraph-Rec
      ├── DataHandler.py
