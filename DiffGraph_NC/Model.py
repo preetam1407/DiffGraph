@@ -496,3 +496,306 @@ class MAE(nn.Module):
    
         return tensor.mean(dim=list(range(1, len(tensor.shape))))
 
+
+class MetaPathLearner(nn.Module):
+    """
+    GTN-style learnable meta-path block.
+    Input: A_orig (E x N x N) tensor of single-hop adjacencies.
+    Output: A_learned (C x N x N) tensor of learned 2-hop meta-path adjacencies.
+    """
+    def __init__(self, num_edge_types, num_channels):
+        super(MetaPathLearner, self).__init__()
+        self.conv1 = nn.Linear(num_edge_types, num_channels, bias=False)
+        self.conv2 = nn.Linear(num_edge_types, num_channels, bias=False)
+        self.conv3 = nn.Linear(num_edge_types, num_channels, bias=False)
+
+    def forward(self, A_orig):
+        # A_orig: (E, N, N)
+        # Soft selections α1, α2: (C, E)
+        α1 = F.softmax(self.conv1.weight, dim=1)
+        α2 = F.softmax(self.conv2.weight, dim=1)
+        α3 = F.softmax(self.conv3.weight, dim=1)  # (C, E)
+        print("α3 channel 0:", α3[0])
+        # Build Q1, Q2: (C, N, N)
+        Q1 = torch.einsum('ce,enk->cnk', α1, A_orig)
+        Q2 = torch.einsum('ce,enk->cnk', α2, A_orig)
+        Q3 = torch.einsum('ce,enk->cnk', α3, A_orig)
+        # Compose 2-hop meta-paths per channel
+        A_learned = torch.stack([Q1[c] @ Q2[c] @ Q3[c]
+                                 for c in range(α1.size(0))], dim=0)
+        return A_learned
+    
+
+
+# import torch
+# import torch.nn as nn
+# import torch.nn.functional as F
+# import torch_sparse
+# from torch_geometric.utils import softmax
+# from gcn import GCNConv
+# from Utils.Utils import _norm, generate_non_local_graph
+
+# class FastGTNs(nn.Module):
+#     def __init__(self, num_edge_type, w_in, num_class, num_nodes, args=None):
+#         super().__init__()
+#         self.args = args
+#         self.num_nodes = num_nodes
+#         self.num_FastGTN_layers = args.num_FastGTN_layers
+#         self.fastGTNs = nn.ModuleList([
+#             FastGTN(
+#                 num_edge_type if i==0 else args.node_dim,
+#                 w_in if i==0 else args.node_dim,
+#                 num_class,
+#                 num_nodes,
+#                 args
+#             )
+#             for i in range(self.num_FastGTN_layers)
+#         ])
+#         self.linear = nn.Linear(args.node_dim, num_class)
+#         self.loss = nn.BCELoss() if args.dataset=='PPI' else nn.CrossEntropyLoss()
+
+#     def forward(self, A_list, X, target_x, target=None, eval=False, **kwargs):
+#         H_, Ws = self.fastGTNs[0](A_list, X, self.num_nodes, **kwargs)
+#         for i in range(1, self.num_FastGTN_layers):
+#             H_, Ws = self.fastGTNs[i](A_list, H_, self.num_nodes, **kwargs)
+#         y = self.linear(H_[target_x])
+#         if eval:
+#             return y
+#         return (self.loss(torch.sigmoid(y) if self.args.dataset=='PPI' else y, target), y, Ws)
+
+# class FastGTN(nn.Module):
+#     def __init__(self, num_edge_type, w_in, num_class, num_nodes, args=None):
+#         super().__init__()
+#         self.args = args
+#         self.num_edge_type = num_edge_type + (1 if args.non_local else 0)
+#         self.num_channels = args.num_channels
+#         self.num_nodes = num_nodes
+#         self.w_in = w_in
+#         self.w_out = args.node_dim
+#         self.num_layers = args.num_layers
+
+#         self.layers = nn.ModuleList([
+#             FastGTLayer(
+#                 self.num_edge_type,
+#                 self.num_channels,
+#                 num_nodes,
+#                 first=(i==0),
+#                 args=args
+#             )
+#             for i in range(self.num_layers)
+#         ])
+
+#         # initial channel projections
+#         self.Ws = nn.ParameterList([
+#             GCNConv(in_channels=w_in, out_channels=self.w_out).weight
+#             for _ in range(self.num_channels)
+#         ])
+#         self.linear1 = nn.Linear(self.w_out*self.num_channels, self.w_out)
+#         self.feat_trans_layers = nn.ModuleList([
+#             nn.Sequential(nn.Linear(self.w_out,128), nn.ReLU(), nn.Linear(128,64))
+#             for _ in range(self.num_layers+1)
+#         ])
+#         self.relu = nn.ReLU()
+#         self.out_norm = nn.LayerNorm(self.w_out)
+
+#     def forward(self, A, X, num_nodes, eval=False, epoch=None, layer=None):
+#         Ws, H = [], []
+#         # project X into each channel
+#         X_ = [X @ W for W in self.Ws]
+#         H  = [X @ W for W in self.Ws]
+
+#         for i, gtlayer in enumerate(self.layers):
+#             # optional non-local graph update
+#             if self.args.non_local:
+#                 g_new = generate_non_local_graph(
+#                     self.args, self.feat_trans_layers[i], torch.stack(H).mean(dim=0),
+#                     A, self.num_edge_type, num_nodes
+#                 )
+#                 deg_inv_sqrt, deg_row, deg_col = _norm(g_new[0].detach(), num_nodes, g_new[1])
+#                 g_new[1] = softmax(g_new[1], deg_row)
+#                 if len(A) < self.num_edge_type:
+#                     A.append(g_new)
+#                 else:
+#                     A[-1] = g_new
+
+#             H, W = gtlayer(H, A, num_nodes, epoch=epoch, layer=i+1)
+#             Ws.append(W)
+
+#         # blend and aggregate channels
+#         for i in range(self.num_channels):
+#             comb = self.args.beta * X_[i] + (1-self.args.beta) * H[i]
+#             if i==0:
+#                 H_ = F.relu(comb)
+#             else:
+#                 if self.args.channel_agg=='concat':
+#                     H_ = torch.cat((H_, F.relu(comb)), dim=1)
+#                 else:
+#                     H_ = H_ + F.relu(comb)
+
+#         if self.args.channel_agg=='concat':
+#             H_ = F.relu(self.linear1(H_))
+#         else:
+#             H_ = H_ / self.num_channels
+
+#         return H_, Ws
+
+# class FastGTLayer(nn.Module):
+#     def __init__(self, in_channels, out_channels, num_nodes, first=True, args=None):
+#         super().__init__()
+#         self.conv1 = FastGTConv(in_channels, out_channels, num_nodes, args=args)
+#         self.first = first
+#         self.num_nodes = num_nodes
+
+#     def forward(self, H_, A, num_nodes, epoch=None, layer=None):
+#         result_A, W1 = self.conv1(A, num_nodes, epoch=epoch, layer=layer)
+#         Hs = []
+#         for i, (edge_index, edge_value) in enumerate(result_A):
+#             mat = torch.sparse_coo_tensor(
+#                 edge_index, edge_value, (num_nodes, num_nodes)
+#             ).to(edge_index.device)
+#             Hs.append(torch.sparse.mm(mat, H_[i]))
+#         return Hs, W1
+
+# class FastGTConv(nn.Module):
+#     def __init__(self, in_channels, out_channels, num_nodes, args=None):
+#         super().__init__()
+#         self.weight = nn.Parameter(torch.Tensor(out_channels, in_channels))
+#         self.bias = None
+#         self.scale = nn.Parameter(torch.Tensor([0.1]), requires_grad=False)
+#         self.args = args
+#         self.num_nodes = num_nodes
+#         self.reset_parameters()
+
+#     def reset_parameters(self):
+#         nn.init.normal_(self.weight, std=0.1)
+#         if self.args.non_local and self.args.non_local_weight != 0:
+#             with torch.no_grad():
+#                 self.weight[:, -1] = self.args.non_local_weight
+
+#     def forward(self, A, num_nodes, epoch=None, layer=None):
+#         filter = F.softmax(self.weight, dim=1)
+#         results = []
+#         for i in range(filter.size(0)):
+#             total_idx = None
+#             total_val = None
+#             for j, (edge_index, edge_value) in enumerate(A):
+#                 w = filter[i, j]
+#                 if total_idx is None:
+#                     total_idx = edge_index
+#                     total_val = edge_value * w
+#                 else:
+#                     total_idx = torch.cat((total_idx, edge_index), dim=1)
+#                     total_val = torch.cat((total_val, edge_value * w), dim=0)
+#             idx, val = torch_sparse.coalesce(
+#                 total_idx, total_val, m=num_nodes, n=num_nodes, op='add'
+#             )
+#             results.append((idx, val))
+#         return results, filter
+#     import torch
+# import torch.nn as nn
+# import torch.nn.functional as F
+# from torch.nn.init import xavier_normal_
+
+# class FastGTNWithDiffusion(nn.Module):
+#     """
+#     Runs FastGTN backbone over the full heterogeneous graph,
+#     pads author-only features to full node set,
+#     slices out author embeddings,
+#     then applies diffusion + classification from HGDM.
+#     """
+#     def __init__(self,
+#                  f_dim,
+#                  num_edge_type,
+#                  w_in,
+#                  num_class,
+#                  num_nodes,
+#                  args):
+#         super(FastGTNWithDiffusion, self).__init__()
+#         self.args = args
+#         self.num_nodes = num_nodes
+#         # 1) FastGTN backbone
+#         self.fastgtn = FastGTNs(num_edge_type,
+#                                 w_in,
+#                                 num_class,
+#                                 num_nodes,
+#                                 args)
+#         # 2) transform initial author features
+#         self.transform_layer = nn.Linear(f_dim, args.latdim, bias=True)
+#         xavier_normal_(self.transform_layer.weight, gain=1.414)
+#         # 3) diffusion modules
+#         out_dims = eval(args.dims) + [args.latdim]
+#         in_dims  = out_dims[::-1]
+#         self.user_denoise_model = Denoise(in_dims,
+#                                           out_dims,
+#                                           args.d_emb_size,
+#                                           norm=args.norm)
+#         self.diffusion_model    = GaussianDiffusion(args.noise_scale,
+#                                                    args.noise_min,
+#                                                    args.noise_max,
+#                                                    args.steps)
+#         # 4) final classifier
+#         self.dense = nn.Linear(args.latdim, num_class)
+
+#     def cal_loss(self, ancs, label, he_adjs, feature_list):
+#         # -- 1) initial author embeddings
+#         init_embed = self.transform_layer(feature_list)    # (NA, latdim)
+#         NA = init_embed.size(0)
+#         # -- 2) pad to full graph features
+#         device = init_embed.device
+#         X_full = torch.zeros((self.num_nodes, init_embed.size(1)), device=device)
+#         X_full[:NA] = init_embed
+#         # -- 3) forward through FastGTN backbone
+#         H_full, _ = self.fastgtn.fastGTNs[0](he_adjs, X_full, self.num_nodes)
+#         for i in range(1, self.fastgtn.num_FastGTN_layers):
+#             H_full, _ = self.fastgtn.fastGTNs[i](he_adjs, H_full, self.num_nodes)
+#         # H_full: (N_tot, latdim)
+#         # -- 4) slice out authors
+#         author_embed = H_full[:NA]                        # (NA, latdim)
+#         # -- 5) diffusion
+#         diff_loss, diff_embeds = self.diffusion_model.training_losses2(
+#             self.user_denoise_model,
+#             author_embed,
+#             init_embed,
+#             ancs)
+#         diff_loss = diff_loss.mean()
+#         # -- 6) classification
+#         all_embeds = author_embed + diff_embeds
+#         logits     = self.dense(all_embeds)
+#         logp       = F.log_softmax(logits, dim=1)
+#         batch_logits = logp[ancs]
+#         batch_labels = torch.argmax(label[ancs], dim=-1)
+#         nll_loss = F.nll_loss(batch_logits, batch_labels)
+#         return nll_loss, diff_loss
+
+#     def get_embeds(self, ancs, label, he_adjs, feature_list):
+#         init_embed = self.transform_layer(feature_list)
+#         NA = init_embed.size(0)
+#         X_full = torch.zeros((self.num_nodes, init_embed.size(1)), device=init_embed.device)
+#         X_full[:NA] = init_embed
+#         H_full, _ = self.fastgtn.fastGTNs[0](he_adjs, X_full, self.num_nodes)
+#         for i in range(1, self.fastgtn.num_FastGTN_layers):
+#             H_full, _ = self.fastgtn.fastGTNs[i](he_adjs, H_full, self.num_nodes)
+#         author_embed = H_full[:NA]
+#         diff_embeds = self.diffusion_model.p_sample(
+#             self.user_denoise_model,
+#             author_embed,
+#             self.args.sampling_steps)
+#         all_embeds = author_embed + diff_embeds
+#         return all_embeds[ancs]
+
+#     def get_allembeds(self, he_adjs, feature_list):
+#         init_embed = self.transform_layer(feature_list)
+#         NA = init_embed.size(0)
+#         X_full = torch.zeros((self.num_nodes, init_embed.size(1)), device=init_embed.device)
+#         X_full[:NA] = init_embed
+#         H_full, _ = self.fastgtn.fastGTNs[0](he_adjs, X_full, self.num_nodes)
+#         for i in range(1, self.fastgtn.num_FastGTN_layers):
+#             H_full, _ = self.fastgtn.fastGTNs[i](he_adjs, H_full, self.num_nodes)
+#         author_embed = H_full[:NA]
+#         diff_embeds = self.diffusion_model.p_sample(
+#             self.user_denoise_model,
+#             author_embed,
+#             self.args.sampling_steps)
+#         all_embeds = author_embed + diff_embeds
+#         scores = self.dense(all_embeds)
+#         return all_embeds, scores

@@ -29,7 +29,7 @@ def ParseArgs():
 
 
 	#gcn_setting
-	parser.add_argument('--epoch', default=100, type=int, help='number of epochs')
+	parser.add_argument('--epoch', default=10, type=int, help='number of epochs')
 	parser.add_argument('--decay', default=0.96, type=float, help='weight decay rate')
 	parser.add_argument('--decay_step', type=int,   default=1)
 	parser.add_argument('--init', default=False, type=bool, help='whether initial embedding')
@@ -40,6 +40,21 @@ def ParseArgs():
 	parser.add_argument('--topk', default=20, type=int, help='K of top K')
 	parser.add_argument('--dropRate', default=0.5, type=float, help='rate for dropout layer')
 	parser.add_argument('--gpu', default='2', type=str, help='indicates which gpu to use')
+	parser.add_argument('--num_edge_types', default=6, type=int, help='AP,PA,CP,PC,PT,TP')
+	parser.add_argument('--num_channels',   default=3, type=int, help='how many author–author meta‑paths to learn')
+
+	parser.add_argument('--model', default='HGDM', type=str, help='Model name: HGDM or FastGTN')
+	parser.add_argument('--num_FastGTN_layers', type=int, default=2, help='Number of FastGTN layers') 
+	parser.add_argument('--num_layers', type=int, default=1, help='Number of GTLayers inside FastGTN')
+	parser.add_argument('--node_dim', type=int, default=64, help='Node dimension after GTN layer')
+	parser.add_argument('--channel_agg', type=str, default='concat', choices=['concat', 'mean'], help='Channel aggregation')
+	parser.add_argument('--beta', type=float, default=0.5, help='Interpolation factor between initial X and GTN output')
+	parser.add_argument('--non_local', action='store_true', help='Enable non-local graph generation')
+	parser.add_argument('--non_local_weight', type=float, default=0.1, help='Weight for non-local edges')
+	parser.add_argument('--dataset', type=str, default='DBLP', help='Dataset name (DBLP, PPI, etc.)')
+
+
+
 	
 	
 	#diffusion setting
@@ -51,8 +66,7 @@ def ParseArgs():
 	parser.add_argument('--noise_min', type=float, default=0.0001)
 	parser.add_argument('--noise_max', type=float, default=0.001)
 	parser.add_argument('--sampling_steps', type=int, default=0)
-
-
+	
 
 	return parser.parse_args()
 args = ParseArgs()
